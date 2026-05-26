@@ -72,11 +72,14 @@ jobs:
         run: bundle exec rake "vendor:${{ matrix.platform }}"
 
       - name: Cross-compile native gem
-        # rake-compiler-dock without --platform picks the alphabetically-first
-        # image (mingw32 — Windows!). Always pass --platform explicitly.
+        # rake-compiler-dock's CLI has no --platform option; the target image
+        # is selected via the RCD_PLATFORM env var. Without it the dock
+        # defaults to "x86-mingw32 x64-mingw32" (Windows!) and the build
+        # fails because the Windows image has no bundler in PATH.
+        env:
+          RCD_PLATFORM: ${{ matrix.platform }}
         run: |
           bundle exec rake-compiler-dock \
-            --platform=${{ matrix.platform }} \
             sh -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
 
       - uses: actions/upload-artifact@v4
