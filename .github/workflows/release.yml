@@ -78,12 +78,21 @@ jobs:
         # /etc/rubybashrc that a login bash sources — using `sh -c` bypasses
         # that and produces "bundle: not found". Use `bash --login -c` so
         # the cross-Ruby for RUBY_CC_VERSION is activated.
+        #
+        # We point extconf.rb at the vendored libcurl-impersonate with an
+        # explicit CURL_IMPERSONATE_DIR rather than relying on vendor/<plat>
+        # auto-detection, because the cross-Ruby's RUBY_PLATFORM inside the
+        # dock does not necessarily match the rubygems platform tag exactly.
         env:
           RCD_PLATFORM: ${{ matrix.platform }}
           RUBY_CC_VERSION: "3.4.0:3.3.0:3.2.0:3.1.0:3.0.0"
         run: |
-          bundle exec rake-compiler-dock \
-            bash --login -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
+          bundle exec rake-compiler-dock bash --login -c "
+            set -ex
+            export CURL_IMPERSONATE_DIR=\"\$PWD/ext/curl_impersonate/vendor/${{ matrix.platform }}\"
+            bundle install
+            bundle exec rake native:${{ matrix.platform }}
+          "
 
       - uses: actions/upload-artifact@v4
         with:
