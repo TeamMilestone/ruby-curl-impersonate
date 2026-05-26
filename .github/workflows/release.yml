@@ -52,8 +52,8 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - x86_64-linux
-          - aarch64-linux
+          - x86_64-linux-gnu
+          - aarch64-linux-gnu
     steps:
       - uses: actions/checkout@v4
 
@@ -65,15 +65,18 @@ jobs:
       - name: Set up QEMU
         # Needed for cross-arch container execution when building aarch64
         # gems on an x86_64 runner.
-        if: matrix.platform == 'aarch64-linux'
+        if: matrix.platform == 'aarch64-linux-gnu'
         uses: docker/setup-qemu-action@v3
 
       - name: Download libcurl-impersonate for ${{ matrix.platform }}
         run: bundle exec rake "vendor:${{ matrix.platform }}"
 
       - name: Cross-compile native gem
+        # rake-compiler-dock without --platform picks the alphabetically-first
+        # image (mingw32 — Windows!). Always pass --platform explicitly.
         run: |
           bundle exec rake-compiler-dock \
+            --platform=${{ matrix.platform }} \
             sh -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
 
       - uses: actions/upload-artifact@v4

@@ -25,10 +25,10 @@ CURL_IMPERSONATE_VERSION = "1.5.1".freeze
 # release asset suffix + SHA256. The Ruby triple is what shows up in the
 # .gem filename and in RUBY_PLATFORM on the target system.
 CURL_IMPERSONATE_PLATFORMS = {
-  "arm64-darwin"   => { asset: "arm64-macos",        sha256: "c78ac9f0772ff806c7196764b57fc4fab426e95cf7d64fd9f3334e25b998c551" },
-  "x86_64-darwin"  => { asset: "x86_64-macos",       sha256: "a744c0f7b6e9ab9aa0a436134e062a9bf56c9293832ac01c63b5ea751fb0209d" },
-  "aarch64-linux"  => { asset: "aarch64-linux-gnu",  sha256: "3bcaeeca0428fe379f6c6e44b18cf09fec0e940260ff66f6be8334a08f69b139" },
-  "x86_64-linux"   => { asset: "x86_64-linux-gnu",   sha256: "f5da4e08253ff8aa0a51ee5ce6ee0c169b46f88f2285d8351ce674f88a6aa4bc" },
+  "arm64-darwin"       => { asset: "arm64-macos",       sha256: "c78ac9f0772ff806c7196764b57fc4fab426e95cf7d64fd9f3334e25b998c551" },
+  "x86_64-darwin"      => { asset: "x86_64-macos",      sha256: "a744c0f7b6e9ab9aa0a436134e062a9bf56c9293832ac01c63b5ea751fb0209d" },
+  "aarch64-linux-gnu"  => { asset: "aarch64-linux-gnu", sha256: "3bcaeeca0428fe379f6c6e44b18cf09fec0e940260ff66f6be8334a08f69b139" },
+  "x86_64-linux-gnu"   => { asset: "x86_64-linux-gnu",  sha256: "f5da4e08253ff8aa0a51ee5ce6ee0c169b46f88f2285d8351ce674f88a6aa4bc" },
 }.freeze
 
 VENDOR_ROOT = File.expand_path("../ext/curl_impersonate/vendor", __dir__)
