@@ -73,14 +73,17 @@ jobs:
 
       - name: Cross-compile native gem
         # rake-compiler-dock's CLI has no --platform option; the target image
-        # is selected via the RCD_PLATFORM env var. Without it the dock
-        # defaults to "x86-mingw32 x64-mingw32" (Windows!) and the build
-        # fails because the Windows image has no bundler in PATH.
+        # is selected via the RCD_PLATFORM env var. The dock's cross-Ruby and
+        # bundler live inside the image but are only put on $PATH by the
+        # /etc/rubybashrc that a login bash sources — using `sh -c` bypasses
+        # that and produces "bundle: not found". Use `bash --login -c` so
+        # the cross-Ruby for RUBY_CC_VERSION is activated.
         env:
           RCD_PLATFORM: ${{ matrix.platform }}
+          RUBY_CC_VERSION: "3.4.0:3.3.0:3.2.0:3.1.0:3.0.0"
         run: |
           bundle exec rake-compiler-dock \
-            sh -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
+            bash --login -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
 
       - uses: actions/upload-artifact@v4
         with:
