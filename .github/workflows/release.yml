@@ -19,8 +19,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, platform: arm64-darwin   }
-          - { runner: macos-13, platform: x86_64-darwin  }
+          - { runner: macos-14, platform: arm64-darwin }
+          # x86_64-darwin (Intel Mac) intentionally omitted from 0.1.0 —
+          # GitHub's macos-13 runner queue is essentially permanently
+          # saturated (jobs sit for hours), and Intel Macs are a shrinking
+          # minority post-Apple-Silicon. Users on Intel Macs can install
+          # via the source gem after `brew install teammilestone/tap/libcurl-impersonate`.
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
