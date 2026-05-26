@@ -22,251 +22,156 @@ Go 버전은 cgo로 `libcurl-impersonate`를 직접 호출한다. 핵심 요소:
 7. `pkg-config: libcurl-impersonate`로 메인 라이브러리 링크
 8. 공개 API: `DoRequest(url, proxy, impersonate, headers, postData, followRedirects, timeoutSec) -> (*Response, error)`, `ExtractCookies(headers) map[string]string`
 
-## 3. Ruby에서의 구현 접근 — FFI 권장
+## 3. Ruby에서의 구현 접근 — C extension (mkmf) 채택
 
-두 가지 옵션이 있고, **FFI(ruby-ffi gem)를 권장**한다.
+**결정 (2026-05-27)**: C extension으로 구현. 이유는 업스트림이 정적 라이브러리(`.a`)만 배포하기 때문.
 
-| 옵션 | 장점 | 단점 |
-|------|------|------|
-| **FFI (권장)** | gem install 시 컴파일러 불필요, 코드가 짧고 읽기 쉬움, Go cgo와 구조가 유사 | 콜백 GC 처리 주의 필요 |
-| C extension (`mkmf`) | 약간의 성능 우위, `curb` gem과 동일 방식 | `extconf.rb` 작성, gem install 시 빌드 툴체인 필요, 디버깅 난이도↑ |
+당초 FFI(ruby-ffi)가 더 짧고 읽기 쉬워 1순위 후보였지만, 실제 환경 검증에서 다음이 확인됐다:
 
-**Curb 같은 기존 gem 재활용은 불가**: `curb`는 시스템 libcurl에 링크되어 있고 `curl_easy_impersonate` 심볼이 없음. 직접 바인딩을 만들어야 한다.
+- `libcurl-impersonate` 업스트림(lexiforest) macOS arm64 릴리스 tarball 내용:
+  ```
+  libcurl-impersonate.a
+  libcurl-impersonate.la
+  libngtcp2_crypto_ossl.a
+  ```
+- `.dylib`(또는 `.so`)이 아예 없음 — BoringSSL을 정적 링크하기 때문에 의도된 설계로 추정
+- Ruby FFI는 `dlopen`으로 동적 라이브러리만 로드 가능 → 사용 불가
+- Go 버전은 cgo로 `.a`를 정적 링크하므로 작동. Ruby에서 같은 결과를 얻으려면 mkmf로 C extension을 빌드해야 함
 
-## 4. 사전 요구사항 (사용자 시스템)
+| 옵션 | 채택 여부 | 비고 |
+|------|----------|------|
+| FFI (ruby-ffi) | ❌ | 업스트림에 dylib 없음 |
+| **C extension (mkmf)** | ✅ | Go cgo와 1:1 대응, `.a` 정적 링크 |
+| 기존 `curb` 재활용 | ❌ | 시스템 libcurl에 링크되어 `curl_easy_impersonate` 심볼 없음 |
 
-Go 프로젝트와 동일하다.
+### 3.1 배포 전략 — A2: precompiled platform gems
 
-```bash
-# macOS
-brew tap TeamMilestone/tap
-brew install libcurl-impersonate libidn2 zstd
+사용자가 `brew install`을 선행하지 않아도 되도록, RubyGems에 플랫폼별 precompiled gem을 publish한다. `nokogiri`/`sqlite3` 방식.
 
-# Ubuntu/Debian
-apt-get install libidn2-dev libzstd-dev
-# libcurl-impersonate는 GitHub releases에서 직접 설치
-```
+- **native gem** (소스 gem): `extconf.rb`가 빌드 시점에 `pkg-config --libs libcurl-impersonate` 또는 vendored `.a`를 찾아 링크. 개발자/특수 플랫폼용
+- **platform gems**: `rake-compiler-dock`으로 CI에서 미리 빌드 → 4종(`arm64-darwin`, `x86_64-darwin`, `aarch64-linux`, `x86_64-linux`)
+- 빌드 시 lexiforest 업스트림 tarball을 다운로드해 `.a` 추출 → 정적 링크 → `.bundle`/`.so`를 gem에 포함
 
-`pkg-config --libs libcurl-impersonate`가 동작해야 함. macOS Homebrew 설치 시 `/opt/homebrew/lib/pkgconfig/`에 `.pc` 파일이 있는지 확인.
+사용자 입장에서 `gem install curl_impersonate`는 zero-dependency (RubyGems가 자동으로 매칭 플랫폼 gem을 받음).
 
-## 5. 디렉터리 구조 (생성할 것)
+## 4. 사전 요구사항
+
+### 4.1 일반 사용자 (precompiled gem 사용 시)
+- 없음. `gem install curl_impersonate`만 실행하면 됨.
+
+### 4.2 소스 gem 빌드 시 (개발자 / 지원되지 않는 플랫폼)
+- 컴파일러 (gcc/clang) + make
+- 다음 둘 중 하나:
+  - 시스템에 `libcurl-impersonate` 설치 (`brew install teammilestone/tap/libcurl-impersonate` 등) → `pkg-config --libs libcurl-impersonate` 동작
+  - 또는 환경변수 `CURL_IMPERSONATE_DIR`로 `.a`와 헤더 디렉터리 직접 지정
+
+### 4.3 CI에서 precompiled gem 빌드 시
+- `rake-compiler-dock` Docker 환경 (Linux 크로스 컴파일)
+- macOS 빌드는 macOS 러너에서 직접
+
+## 5. 디렉터리 구조
 
 ```
 ruby-curl-impersonate/
 ├── docs/
 │   └── HANDOFF.md                      # 이 문서
+├── ext/
+│   └── curl_impersonate/
+│       ├── extconf.rb                  # mkmf: pkg-config / vendored .a 분기
+│       ├── curl_impersonate.c          # C 래퍼 (do_request, callbacks)
+│       └── vendor/                     # CI에서 다운로드한 업스트림 .a (gitignored)
 ├── lib/
-│   ├── curl_impersonate.rb             # 진입점, FFI 로딩 + 공개 API
-│   ├── curl_impersonate/
-│   │   ├── version.rb
-│   │   ├── ffi_bindings.rb             # FFI extern 선언
-│   │   ├── response.rb                 # Response 구조체
-│   │   └── cookies.rb                  # extract_cookies
+│   ├── curl_impersonate.rb             # Ruby 진입점, require ext + 공개 API
+│   └── curl_impersonate/
+│       ├── version.rb
+│       ├── curl_impersonate.bundle     # 컴파일된 ext (gitignored, rake-compiler 출력)
+│       ├── response.rb                 # Response 구조체
+│       └── cookies.rb                  # extract_cookies (Ruby)
 ├── spec/
 │   ├── spec_helper.rb
 │   └── curl_impersonate_spec.rb
-├── curl_impersonate.gemspec
+├── .github/workflows/
+│   └── release.yml                     # rake-compiler-dock 매트릭스 빌드
+├── curl_impersonate.gemspec            # spec.extensions = [extconf.rb]
 ├── Gemfile
-├── Rakefile
+├── Rakefile                            # Rake::ExtensionTask + cross-compile
 ├── README.md
-└── LICENSE                              # MIT (Go 프로젝트와 동일)
+└── LICENSE                             # MIT (Go 프로젝트와 동일)
 ```
 
 ## 6. 구체적 작업 항목
 
-### 6.1 gemspec / Gemfile
+### 6.1 gemspec / Gemfile / Rakefile
 
-```ruby
-# curl_impersonate.gemspec
-Gem::Specification.new do |spec|
-  spec.name          = "curl_impersonate"
-  spec.version       = CurlImpersonate::VERSION
-  spec.authors       = ["TeamMilestone"]
-  spec.email         = ["dev@team-milestone.io"]
-  spec.summary       = "Ruby bindings for libcurl-impersonate — browser-identical TLS fingerprints"
-  spec.homepage      = "https://github.com/TeamMilestone/ruby-curl-impersonate"
-  spec.license       = "MIT"
-  spec.required_ruby_version = ">= 3.0"
+`spec.extensions = ["ext/curl_impersonate/extconf.rb"]`가 핵심. `gem install` 시 RubyGems가 자동으로 `extconf.rb` → `make`를 호출한다. precompiled 플랫폼 gem은 이 단계를 건너뛰고 빌드된 `.bundle`/`.so`를 그대로 사용.
 
-  spec.files = Dir["lib/**/*", "LICENSE", "README.md"]
-  spec.require_paths = ["lib"]
+Rakefile은 `Rake::ExtensionTask`로 `rake compile`을 제공. 빌드 산출물은 `lib/curl_impersonate/curl_impersonate.{bundle,so}`로 들어간다.
 
-  spec.add_dependency "ffi", "~> 1.16"
-  spec.add_development_dependency "rspec", "~> 3.12"
-end
-```
+### 6.2 ext/curl_impersonate/extconf.rb
 
-### 6.2 FFI 바인딩 — 핵심 파트
+탐색 순서:
 
-`curl_easy_impersonate`가 표준 헤더에 없는 확장 함수라는 점이 가장 중요한 함정. FFI에서는 그냥 `attach_function`으로 선언하면 동적 로더가 심볼을 찾아준다 (libcurl-impersonate 자체에 심볼이 export되어 있기 때문).
+1. 환경변수 `CURL_IMPERSONATE_DIR`이 있으면 그걸 사용 (CI cross-compile용)
+2. `ext/curl_impersonate/vendor/<arch>/` 디렉터리에 `.a`가 있으면 사용 (precompiled gem 빌드용)
+3. `pkg-config --libs --cflags libcurl-impersonate`로 시스템 설치 발견 시 사용
+4. 모두 실패 → 친절한 에러 메시지로 abort
 
-```ruby
-# lib/curl_impersonate/ffi_bindings.rb
-require "ffi"
+링크: `-lcurl-impersonate -lz -liconv` + macOS 시스템 프레임워크 (`CoreFoundation`, `Security`, `SystemConfiguration`, `LDAP`, `resolv`, `c++`)
+헤더: `curl-impersonate/curl_impersonate.h`(brew 설치 시) 또는 직접 `curl_easy_impersonate` 외부 선언
 
-module CurlImpersonate
-  module FFIBindings
-    extend FFI::Library
+### 6.3 ext/curl_impersonate/curl_impersonate.c — Go 버전 1:1 포팅
 
-    # 라이브러리 로딩 — pkg-config 또는 알려진 경로에서
-    lib_candidates = [
-      "libcurl-impersonate-chrome.4.dylib",  # macOS Homebrew tap 설치 파일명 확인 필요
-      "libcurl-impersonate.dylib",
-      "libcurl-impersonate.so.4",
-      "libcurl-impersonate.so",
-      "/opt/homebrew/lib/libcurl-impersonate-chrome.4.dylib",
-    ]
-    ffi_lib lib_candidates
+Go `curl.go`의 구조를 거의 그대로 가져온다:
 
-    # libcurl 표준 함수
-    attach_function :curl_global_init,    [:long],            :int
-    attach_function :curl_easy_init,      [],                 :pointer
-    attach_function :curl_easy_cleanup,   [:pointer],         :void
-    attach_function :curl_easy_setopt,    [:pointer, :int, :varargs], :int
-    attach_function :curl_easy_perform,   [:pointer],         :int
-    attach_function :curl_easy_getinfo,   [:pointer, :int, :varargs], :int
-    attach_function :curl_easy_strerror,  [:int],             :string
-    attach_function :curl_slist_append,   [:pointer, :string], :pointer
-    attach_function :curl_slist_free_all, [:pointer],         :void
+- `WriteMemoryCallback` / `HeaderCallback`: realloc 기반 누적 (Go 버전 동일)
+- `do_request_impl(url, proxy, impersonate, headers, post_data, follow, timeout)`:
+  1. `curl_easy_init`
+  2. `curl_easy_impersonate(handle, target, 1)`
+  3. `curl_easy_setopt` 시리즈
+  4. 프록시 분리 → `CURLOPT_PROXY` + `CURLOPT_PROXYUSERPWD`
+  5. headers Hash → `curl_slist_append` 반복 → `CURLOPT_HTTPHEADER`
+  6. `curl_easy_perform`
+  7. `curl_easy_getinfo(CURLINFO_RESPONSE_CODE)`
+  8. `rb_struct_new`으로 `Response` 만들어 반환
+  9. cleanup (slist_free_all, easy_cleanup, free buffers)
+- `Init_curl_impersonate`: `rb_define_module("CurlImpersonate")` + `rb_define_singleton_method(..., "_do_request_native", ...)` 
 
-    # libcurl-impersonate 확장 함수 — 핵심
-    attach_function :curl_easy_impersonate, [:pointer, :string, :int], :int
+C ↔ Ruby 변환은 `rb_str_new`, `rb_hash_foreach`, `rb_check_string_type` 등 표준 API 사용. GVL은 `curl_easy_perform` 동안 해제(`rb_thread_call_without_gvl`) — 다른 스레드가 계속 진행 가능.
 
-    # CURLOPT 상수 (curl.h에서 발췌해 직접 정의 — 값은 안정적임)
-    CURLOPT_URL              = 10_002
-    CURLOPT_WRITEFUNCTION    = 20_011
-    CURLOPT_WRITEDATA        = 10_001
-    CURLOPT_HEADERFUNCTION   = 20_079
-    CURLOPT_HEADERDATA       = 10_029
-    CURLOPT_TIMEOUT          = 13
-    CURLOPT_ACCEPT_ENCODING  = 10_102
-    CURLOPT_SSL_VERIFYPEER   = 64
-    CURLOPT_SSL_VERIFYHOST   = 81
-    CURLOPT_FOLLOWLOCATION   = 52
-    CURLOPT_PROXY            = 10_004
-    CURLOPT_PROXYUSERPWD     = 10_006
-    CURLOPT_HTTPHEADER       = 10_023
-    CURLOPT_POSTFIELDS       = 10_015
-    CURLOPT_POSTFIELDSIZE    = 60
+### 6.4 공개 API (Ruby)
 
-    CURLINFO_RESPONSE_CODE   = 0x200002
-
-    CURL_GLOBAL_DEFAULT      = 3
-  end
-end
-```
-
-**주의사항**:
-- CURLOPT 값은 `curl.h`에서 발췌. 옵션 종류별로 베이스(10000=문자열 포인터, 20000=함수 포인터)가 정해져 있어 stable함. 단, **실제 빌드 환경에서 한 번은 cross-check** 필요.
-- `:varargs`로 `curl_easy_setopt`을 호출할 때 두 번째 인자의 실제 타입(`:long`, `:string`, `:pointer`)을 호출부에서 명시해야 함.
-
-### 6.3 콜백 (write/header)
-
-FFI 콜백은 **반드시 변수로 잡아두고 GC되지 않게** 유지해야 한다. Go의 `realloc` 누적 패턴 대신, Ruby에서는 호출 측이 `String#<<` 또는 `StringIO`로 누적하는 게 자연스럽다.
-
-```ruby
-# 콜백 시그니처: size_t (*)(void *contents, size_t size, size_t nmemb, void *userp)
-WRITE_CALLBACK = FFI::Function.new(:size_t, [:pointer, :size_t, :size_t, :pointer]) do |contents, size, nmemb, _userp|
-  realsize = size * nmemb
-  # userp 대신 thread-local이나 Fiber-local로 누적 버퍼에 접근
-  buffer = Thread.current[:cci_body_buffer]
-  buffer << contents.read_bytes(realsize) if buffer
-  realsize
-end
-```
-
-대안 — 콜백 안에서 `userp`를 ID로 사용:
-- `userp`에 `FFI::Pointer.new(:int, id)` 같은 식별자를 넣고, 호출 측에서 ID → 버퍼 매핑을 들고 있으면 멀티스레드 안전.
-- 가장 간단한 방식: **요청마다 새 콜백 클로저를 만들고**, 그 클로저가 로컬 `String` 버퍼를 캡처. `do_request` 메서드 안에서 콜백을 생성하면 메서드 종료 시까지 GC되지 않음.
-
-```ruby
-body_buffer = +""
-write_cb = FFI::Function.new(:size_t, [:pointer, :size_t, :size_t, :pointer]) do |ptr, sz, n, _|
-  bytes = sz * n
-  body_buffer << ptr.read_bytes(bytes)
-  bytes
-end
-# write_cb는 do_request 끝까지 살아있음 — OK
-```
-
-### 6.4 공개 API
-
-Go 버전의 시그니처를 Ruby 관용에 맞게 키워드 인자로 변환:
+Ruby 측은 얇은 래퍼만 — 모든 무거운 작업은 C에서 한다.
 
 ```ruby
 # lib/curl_impersonate.rb
+require "curl_impersonate/version"
+require "curl_impersonate/curl_impersonate"  # 컴파일된 ext
+require "curl_impersonate/response"
+require "curl_impersonate/cookies"
+
 module CurlImpersonate
-  Response = Struct.new(:status_code, :body, :headers, keyword_init: true)
+  class Error < StandardError; end
 
-  def self.do_request(
-    url:,
-    proxy: "",
-    impersonate: "chrome131",
-    headers: {},
-    post_data: "",
-    follow_redirects: true,
-    timeout_sec: 15
-  )
-    # 1. curl_easy_init
-    # 2. curl_easy_impersonate(handle, impersonate, 1)
-    # 3. 옵션 세팅 — URL, 콜백, 타임아웃, accept-encoding, SSL_VERIFY 0, FOLLOWLOCATION
-    # 4. 프록시 파싱 → CURLOPT_PROXY + CURLOPT_PROXYUSERPWD
-    # 5. headers → curl_slist 빌드 → CURLOPT_HTTPHEADER
-    # 6. post_data 있으면 CURLOPT_POSTFIELDS
-    # 7. curl_easy_perform
-    # 8. CURLINFO_RESPONSE_CODE 꺼내서 Response 구성
-    # 9. cleanup (slist_free_all, easy_cleanup)
-    # 10. CURLE_OK 아니면 raise
-  end
-
-  def self.extract_cookies(headers_str)
-    cookies = {}
-    headers_str.split("\r\n").each do |line|
-      next unless line.downcase.start_with?("set-cookie:")
-      pair = line[("set-cookie:".length)..].split(";", 2).first.to_s.strip
-      k, v = pair.split("=", 2)
-      cookies[k] = v if k && v
-    end
-    cookies
+  def self.do_request(url:, proxy: "", impersonate: "chrome131",
+                      headers: {}, post_data: "",
+                      follow_redirects: true, timeout_sec: 15)
+    _do_request_native(url, proxy, impersonate, headers, post_data,
+                       follow_redirects, timeout_sec)
   end
 end
 ```
 
-`curl_global_init`은 모듈 로드 시 한 번만:
-
-```ruby
-CurlImpersonate::FFIBindings.curl_global_init(CurlImpersonate::FFIBindings::CURL_GLOBAL_DEFAULT)
-```
+`Response`는 `lib/curl_impersonate/response.rb`에서 Ruby Struct로 정의. C 측에서 `rb_struct_new`로 인스턴스 생성.
 
 ### 6.5 프록시 URL 파싱
 
-Go 버전 `parseProxyURL` 그대로 포팅:
-
-```ruby
-def self.parse_proxy(proxy)
-  return ["", ""] if proxy.nil? || proxy.empty?
-  scheme = ""
-  rest = proxy
-  if (idx = proxy.index("://"))
-    scheme = proxy[0..(idx + 2)]
-    rest = proxy[(idx + 3)..]
-  end
-  if (idx = rest.rindex("@"))
-    auth = rest[0...idx]
-    host = rest[(idx + 1)..]
-    [scheme + host, auth]
-  else
-    [proxy, ""]
-  end
-end
-```
+Go `parseProxyURL`을 C로 포팅 (호출이 자주 일어나지 않으므로 Ruby로 해도 무방). 입력 `http://user:pass@host:port` → `("http://host:port", "user:pass")` 분리.
 
 ### 6.6 에러 처리
 
-- `curl_easy_init`이 nil 반환 → `raise CurlImpersonate::Error, "curl_easy_init failed"`
-- `curl_easy_impersonate` 결과 != 0 → `raise`
-- `curl_easy_perform` 결과 != 0 → `curl_easy_strerror`로 메시지 변환해 `raise`
-- 모든 에러는 `CurlImpersonate::Error < StandardError` 하위 클래스로
+- C 측에서 모든 에러를 `rb_raise(rb_eCurlImpersonateError, ...)`로 던짐
+- `curl_easy_init` 실패, `curl_easy_impersonate` 실패, `curl_easy_perform` 실패(`curl_easy_strerror` 메시지 첨부) 등
+- Ruby 측에 `CurlImpersonate::Error < StandardError` 정의, C에서 `rb_const_get`으로 가져와 사용
 
 ## 7. 테스트 계획
 
@@ -302,33 +207,40 @@ puts CurlImpersonate.extract_cookies(resp.headers)
 
 ## 9. 알려진 함정 / 주의사항
 
-1. **`curl_easy_impersonate` 심볼명** — 빌드된 dylib에 실제로 export됐는지 `nm -gU /opt/homebrew/lib/libcurl-impersonate-chrome.4.dylib | grep impersonate`로 확인. 심볼이 없으면 라이브러리 빌드 자체가 문제.
-2. **dylib 파일명** — Homebrew tap이 설치하는 정확한 dylib 파일명 확인 필요. `libcurl-impersonate-chrome.4.dylib`일 수도 있고 `libcurl-impersonate.4.dylib`일 수도 있음. `ffi_lib`에 후보 배열로 넘기면 첫 번째로 찾는 것을 사용.
-3. **CURLOPT 상수** — `curl.h`에서 추출한 값을 직접 박아넣음. libcurl 메이저 버전 업그레이드 시 값이 바뀔 가능성은 거의 없으나, 7→8 같은 큰 변경에서는 재검증 권장.
-4. **`curl_easy_setopt` varargs** — Ruby FFI에서 `:varargs`로 선언한 함수는 호출 시 `[:long, value]`, `[:string, value]`, `[:pointer, value]` 형태로 타입 힌트를 줘야 함. 잘못된 타입을 주면 silent corruption.
-5. **콜백 GC** — `FFI::Function`은 변수로 잡아 메서드 스코프 동안 살려둘 것. 즉시 GC되면 segfault.
-6. **`curl_slist`** — 빈 리스트는 NULL. 첫 `curl_slist_append(NULL, "...")`는 새 리스트를 만들어 반환. 항상 첫 인자에 이전 반환값을 다시 넘기는 누적 패턴.
-7. **메모리** — FFI에서는 `read_bytes`로 콜백 데이터를 즉시 Ruby String으로 복사하므로, C쪽 메모리 수명은 콜백 호출 동안만 신경 쓰면 됨. Go 버전의 `free_response`에 해당하는 작업은 불필요 (libcurl 내부에서 처리).
-8. **스레드 안전성** — `curl_easy_*`는 핸들 단위로 스레드 안전. 모듈 메서드는 매 호출마다 새 핸들을 만들므로 OK. 단 콜백이 클로저로 버퍼를 캡처하는 패턴이라 호출 간 독립적 — 문제없음.
-9. **CURLOPT_SSL_VERIFYPEER/HOST = 0** — Go 버전이 SSL 검증을 끄고 있음. 핑거프린트 위장이 목적이라 의도된 설정이지만, README에 명시할 것.
+1. **업스트림 정적 라이브러리만 배포** — `.a`만 존재. FFI 불가, C extension 필수. 이게 가장 큰 함정이었고 사전 환경 검증 단계에서 발견됨.
+2. **`curl_easy_impersonate` 헤더 부재** — 표준 `curl/curl.h`에 없음. `brew install` 시 brew formula가 `curl-impersonate/curl_impersonate.h`를 직접 작성해 설치함. C extension에서는 그 헤더를 include하거나, 안 되면 직접 `extern CURLcode curl_easy_impersonate(CURL *, const char *, int);` 선언.
+3. **링크 의존성** — `pkg-config --libs libcurl-impersonate` 결과를 참조. macOS는 `-lz -liconv -framework CoreFoundation -framework SystemConfiguration -framework Security -framework LDAP -lresolv -lc++` 필요. Linux는 `-lz -lidn2 -lzstd` 등.
+4. **`curl_easy_setopt` 가변인자** — C에서 호출 시 옵션별로 정확한 타입(long, char *, void *, function pointer)을 넘겨야 함. 잘못 넘기면 silent corruption.
+5. **`curl_slist`** — 빈 리스트는 NULL. 첫 `curl_slist_append(NULL, "...")`는 새 리스트를 만들어 반환. 항상 이전 반환값을 다시 넘기는 누적 패턴.
+6. **CURLOPT_SSL_VERIFYPEER/HOST = 0** — Go 버전이 SSL 검증을 끔. 핑거프린트 위장이 목적이라 의도된 설정이지만, README에 명시.
+7. **GVL 해제** — `curl_easy_perform`은 블로킹 네트워크 호출. `rb_thread_call_without_gvl`로 감싸지 않으면 다른 Ruby 스레드가 멈춤. C 콜백에서는 GVL 재획득(`rb_thread_call_with_gvl`)이 필요할 수 있으나, callback 안에서 Ruby 객체를 만들지 않고 단순 realloc 누적만 한다면 불필요.
+8. **메모리** — C realloc 버퍼는 함수 끝에서 `free`. 응답이 Ruby `String`으로 복사되면 C 측 메모리는 즉시 해제.
+9. **rake-compiler-dock과 정적 .a 다운로드** — cross-compile 컨테이너 안에서 lexiforest 업스트림 tarball을 다운로드해 `ext/curl_impersonate/vendor/<arch>/libcurl-impersonate.a`로 추출. 플랫폼별로 다른 tarball을 받아야 하므로 Rake 태스크에 분기 필요.
+10. **gemspec `spec.files`에 vendor/ 제외** — 다운로드한 `.a`는 빌드 산출물이지 소스 아님. `.gitignore`에 vendor/ 추가, gemspec `Dir[]` 패턴에서도 제외.
 
-## 10. 작업 순서 추천
+## 10. 작업 순서
 
-1. `bundle init` → gemspec/Gemfile 작성
-2. `lib/curl_impersonate/version.rb`, `ffi_bindings.rb` 작성 — **먼저 라이브러리 로딩과 `curl_easy_impersonate` 심볼 해석이 되는지 확인** (간단한 init/cleanup 스크립트로)
-3. 가장 짧은 GET 한 번 통과시키기 (콜백 없이 응답 코드만)
-4. write 콜백 붙여서 바디 수신
-5. header 콜백 추가
-6. 헤더/POST/프록시/타임아웃 옵션 추가
-7. `extract_cookies` 구현
-8. RSpec 스위트 작성
-9. README + LICENSE(MIT) 추가
-10. `rake build` → `gem push`로 RubyGems 배포 (선택)
+`docs/HANDOFF.md` 외부에서 추적 (Task tool 등). 큰 흐름:
+
+1. 저장소/저작권/원격 ✓
+2. gem 골격 (gemspec + Rakefile + version) ✓
+3. 이 문서 업데이트 (이 단계)
+4. C extension skeleton — `extconf.rb`, `Init_curl_impersonate`만, rake compile 통과
+5. 최소 GET (status code만)
+6. write/header 콜백 + Response struct
+7. 옵션 풀세트 (headers/POST/timeout/redirects/SSL/encoding)
+8. 프록시
+9. `extract_cookies` (Ruby)
+10. RSpec 스위트 + 실제 네트워크 테스트
+11. README 완성
+12. A2 precompiled gem 인프라 (`rake-compiler-dock` + GitHub Actions matrix)
+13. RubyGems 배포 (별도)
 
 ## 11. 참고 링크
 
 - Go 참조 구현: `/Users/wonsup-mini/projects/go-curl-impersonate/curl.go`
 - 상위 라이브러리: https://github.com/lexiforest/curl-impersonate
-- 동일 접근의 Python 바인딩: https://github.com/lexiforest/curl_cffi (구현 참고용으로 매우 유용 — Python `cffi`도 FFI와 패턴이 비슷)
-- ruby-ffi 문서: https://github.com/ffi/ffi/wiki
+- 동일 접근의 Python 바인딩: https://github.com/lexiforest/curl_cffi (구현 참고용으로 매우 유용)
+- mkmf 가이드: https://docs.ruby-lang.org/en/master/MakeMakefile.html
+- rake-compiler / rake-compiler-dock: https://github.com/rake-compiler/rake-compiler-dock
 - libcurl 옵션 레퍼런스: https://curl.se/libcurl/c/curl_easy_setopt.html
