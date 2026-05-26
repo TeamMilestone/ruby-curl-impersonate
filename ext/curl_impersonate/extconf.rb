@@ -46,8 +46,12 @@ def configure_from_dir(dir)
     $LDFLAGS << " -framework Security -framework LDAP"
     $libs    = "#{$libs} -lresolv -liconv -lz -lc++"
   when /linux/
-    # Linux release tarballs are GNU-ABI; idn2 and zstd are dynamic.
-    $libs    = "#{$libs} -lz -lidn2 -lzstd -lpthread -ldl -lm -lstdc++"
+    # The lexiforest release tarball is a fully-static archive — zstd, brotli,
+    # idn2, nghttp{2,3}, ngtcp2, BoringSSL, and a copy of curl itself are all
+    # statically linked into libcurl-impersonate.a. The only external symbols
+    # are the system C/C++ runtime, zlib (often satisfied by libz.so.1 which
+    # ships on every distro), and a handful of pthread/dl/m intrinsics.
+    $libs    = "#{$libs} -lz -lpthread -ldl -lm -lstdc++"
   end
 end
 
@@ -80,6 +84,14 @@ vendor_candidates = [
 ].uniq.map { |t| File.join(__dir__, "vendor", t) }
 
 vendor_arch_dir = vendor_candidates.find { |d| File.directory?(d) }
+
+# Always make our vendored upstream curl 8.15.0 headers visible. brew installs
+# only curl_impersonate.h on macOS (no full curl/ tree) and many Linux runners
+# do not ship libcurl-dev. The .a we link against is the matching curl 8.15.0
+# build, so using these headers is the correct pairing regardless of what is
+# (or is not) in /usr/include/curl/.
+bundled_headers = File.join(__dir__, "include")
+$CFLAGS << " -I#{bundled_headers.shellescape}" if File.directory?(bundled_headers)
 
 if (override = ENV["CURL_IMPERSONATE_DIR"]) && !override.empty?
   warn "[curl_impersonate] using CURL_IMPERSONATE_DIR=#{override}"
