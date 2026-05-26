@@ -98,9 +98,10 @@ static VALUE rb_cci_native_version(VALUE self) {
   return rb_str_new_cstr(curl_version());
 }
 
-/* Signature (stage 6):
+/* Signature (stage 7):
  *   _do_request_native(url, impersonate, headers, post_data,
- *                      follow_redirects, timeout_sec) -> Response
+ *                      follow_redirects, timeout_sec,
+ *                      proxy_url, proxy_userpwd) -> Response
  *
  *   url               : String
  *   impersonate       : String (e.g. "chrome131")
@@ -108,12 +109,13 @@ static VALUE rb_cci_native_version(VALUE self) {
  *   post_data         : String — empty string means GET, non-empty means POST
  *   follow_redirects  : true / false
  *   timeout_sec       : Integer
- *
- * Stage 7 adds the proxy parameter. */
+ *   proxy_url         : String — empty string disables; otherwise host (no auth)
+ *   proxy_userpwd     : String — "user:pass" or empty
+ */
 static VALUE rb_cci_do_request(int argc, VALUE *argv, VALUE self) {
   (void)self;
-  if (argc != 6) {
-    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 6)", argc);
+  if (argc != 8) {
+    rb_raise(rb_eArgError, "wrong number of arguments (given %d, expected 8)", argc);
   }
 
   VALUE rb_url = argv[0];
@@ -122,11 +124,15 @@ static VALUE rb_cci_do_request(int argc, VALUE *argv, VALUE self) {
   VALUE rb_post_data = argv[3];
   VALUE rb_follow = argv[4];
   VALUE rb_timeout = argv[5];
+  VALUE rb_proxy_url = argv[6];
+  VALUE rb_proxy_userpwd = argv[7];
 
   Check_Type(rb_url, T_STRING);
   Check_Type(rb_impersonate, T_STRING);
   Check_Type(rb_headers, T_HASH);
   Check_Type(rb_post_data, T_STRING);
+  Check_Type(rb_proxy_url, T_STRING);
+  Check_Type(rb_proxy_userpwd, T_STRING);
 
   const char *url = StringValueCStr(rb_url);
   const char *impersonate = StringValueCStr(rb_impersonate);
@@ -169,6 +175,13 @@ static VALUE rb_cci_do_request(int argc, VALUE *argv, VALUE self) {
   if (post_len > 0) {
     curl_easy_setopt(handle, CURLOPT_POSTFIELDSIZE, post_len);
     curl_easy_setopt(handle, CURLOPT_COPYPOSTFIELDS, RSTRING_PTR(rb_post_data));
+  }
+
+  if (RSTRING_LEN(rb_proxy_url) > 0) {
+    curl_easy_setopt(handle, CURLOPT_PROXY, StringValueCStr(rb_proxy_url));
+  }
+  if (RSTRING_LEN(rb_proxy_userpwd) > 0) {
+    curl_easy_setopt(handle, CURLOPT_PROXYUSERPWD, StringValueCStr(rb_proxy_userpwd));
   }
 
   /* Custom headers. Build a curl_slist from the Ruby Hash. */
