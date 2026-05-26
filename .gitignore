@@ -1,0 +1,38 @@
+*.gem
+*.rbc
+.bundle/
+.config
+.yardoc
+Gemfile.lock
+InstalledFiles
+_yardoc
+coverage/
+doc/
+lib/bundler/man
+pkg/
+rdoc/
+spec/reports
+test/tmp
+test/version_tmp
+tmp/
+
+# C extension build artifacts
+ext/**/*.o
+ext/**/*.so
+ext/**/*.bundle
+ext/**/Makefile
+ext/**/mkmf.log
+ext/**/extconf.h
+lib/curl_impersonate/curl_impersonate.bundle
+lib/curl_impersonate/curl_impersonate.so
+
+# Vendored upstream artifacts (downloaded at build time)
+ext/curl_impersonate/vendor/
+
+# macOS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
