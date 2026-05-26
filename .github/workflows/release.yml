@@ -90,14 +90,8 @@ jobs:
           bundle exec rake-compiler-dock bash --login -c "
             set -ex
             export CURL_IMPERSONATE_DIR=\"\$PWD/ext/curl_impersonate/vendor/${{ matrix.platform }}\"
-            ls -la /usr/include/curl/ 2>&1 | head -5 || echo '/usr/include/curl/ NOT FOUND'
-            which curl-config 2>&1 || echo 'curl-config NOT FOUND'
             bundle install
-            bundle exec rake native:${{ matrix.platform }} || {
-              echo '=== mkmf.log dump ==='
-              find . -name 'mkmf.log' -exec sh -c 'echo --- {} ---; cat {}' \;
-              exit 1
-            }
+            bundle exec rake native:${{ matrix.platform }}
           "
 
       - uses: actions/upload-artifact@v4
