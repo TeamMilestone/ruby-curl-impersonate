@@ -1,0 +1,141 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Push gems to rubygems.org (only on workflow_dispatch)"
+        required: false
+        default: "false"
+
+jobs:
+  # --- macOS native builds -------------------------------------------------
+  build-darwin:
+    name: build (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, platform: arm64-darwin   }
+          - { runner: macos-13, platform: x86_64-darwin  }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Download libcurl-impersonate for ${{ matrix.platform }}
+        run: bundle exec rake "vendor:${{ matrix.platform }}"
+
+      - name: Build native gem
+        env:
+          RAKE_EXTENSION_PLATFORM: ${{ matrix.platform }}
+        run: bundle exec rake native:${{ matrix.platform }} gem
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.platform }}
+          path: pkg/curl_impersonate-*-${{ matrix.platform }}.gem
+          if-no-files-found: error
+
+  # --- Linux cross-compiled builds via rake-compiler-dock -------------------
+  build-linux:
+    name: build (${{ matrix.platform }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86_64-linux
+          - aarch64-linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+
+      - name: Set up QEMU
+        # Needed for cross-arch container execution when building aarch64
+        # gems on an x86_64 runner.
+        if: matrix.platform == 'aarch64-linux'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Download libcurl-impersonate for ${{ matrix.platform }}
+        run: bundle exec rake "vendor:${{ matrix.platform }}"
+
+      - name: Cross-compile native gem
+        run: |
+          bundle exec rake-compiler-dock \
+            sh -c "bundle install && bundle exec rake native:${{ matrix.platform }} gem"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-${{ matrix.platform }}
+          path: pkg/curl_impersonate-*-${{ matrix.platform }}.gem
+          if-no-files-found: error
+
+  # --- Source gem ----------------------------------------------------------
+  build-source:
+    name: build (source)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - run: bundle exec rake build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gem-source
+          path: pkg/curl_impersonate-*.gem
+          if-no-files-found: error
+
+  # --- Combined release ----------------------------------------------------
+  release:
+    name: publish release
+    needs: [build-darwin, build-linux, build-source]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: gems
+          merge-multiple: true
+
+      - name: List gems
+        run: ls -la gems/
+
+      - name: Create GitHub Release with all gems attached
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gems/*.gem
+          generate_release_notes: true
+
+      # Pushing to rubygems.org is opt-in: only triggered when the workflow is
+      # dispatched manually with publish=true. Tag pushes upload to GitHub
+      # Release only — give us a chance to inspect before publishing.
+      - name: Publish to RubyGems
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true'
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          mkdir -p ~/.gem
+          printf -- "---\n:rubygems_api_key: %s\n" "${GEM_HOST_API_KEY}" > ~/.gem/credentials
+          chmod 0600 ~/.gem/credentials
+          for gem in gems/*.gem; do
+            echo "Publishing ${gem}"
+            gem push "${gem}"
+          done

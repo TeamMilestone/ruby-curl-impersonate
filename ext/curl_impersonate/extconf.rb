@@ -30,6 +30,25 @@ def configure_from_dir(dir)
   # Link the static archive directly so its symbols (including curl_easy_impersonate)
   # end up in our .bundle / .so.
   $LDFLAGS << " #{static_archive.shellescape}"
+
+  # libcurl-impersonate.a bundles BoringSSL, nghttp{2,3}, ngtcp2, zstd, and
+  # brotli statically — but its remaining external dependencies have to be
+  # linked separately. The list differs by target platform; we use the
+  # vendor directory name as a hint when one is available, otherwise fall
+  # back to RUBY_PLATFORM.
+  target = File.basename(dir)
+  target = RUBY_PLATFORM if target.empty? || target == "vendor"
+
+  case target
+  when /darwin/
+    # Source: pkg-config --libs libcurl-impersonate on brew installation.
+    $LDFLAGS << " -framework CoreFoundation -framework SystemConfiguration"
+    $LDFLAGS << " -framework Security -framework LDAP"
+    $libs    = "#{$libs} -lresolv -liconv -lz -lc++"
+  when /linux/
+    # Linux release tarballs are GNU-ABI; idn2 and zstd are dynamic.
+    $libs    = "#{$libs} -lz -lidn2 -lzstd -lpthread -ldl -lm -lstdc++"
+  end
 end
 
 def configure_from_pkg_config
@@ -50,12 +69,22 @@ def configure_from_pkg_config
   $LDFLAGS << " #{static_archive.shellescape}"
 end
 
-vendor_arch_dir = File.join(__dir__, "vendor", RUBY_PLATFORM)
+# Look for vendored libcurl-impersonate under any of these directory names.
+# RUBY_PLATFORM on Darwin includes the OS major version ("arm64-darwin25") but
+# the rake-compiler / rubygems platform triple does not ("arm64-darwin"), so
+# we accept either. The order matters — most-specific wins.
+vendor_candidates = [
+  RUBY_PLATFORM,                       # arm64-darwin25, x86_64-linux, ...
+  RUBY_PLATFORM.sub(/\d+\z/, ""),      # arm64-darwin
+  RUBY_PLATFORM.sub(/-gnu\z/, ""),     # x86_64-linux (from x86_64-linux-gnu)
+].uniq.map { |t| File.join(__dir__, "vendor", t) }
+
+vendor_arch_dir = vendor_candidates.find { |d| File.directory?(d) }
 
 if (override = ENV["CURL_IMPERSONATE_DIR"]) && !override.empty?
   warn "[curl_impersonate] using CURL_IMPERSONATE_DIR=#{override}"
   configure_from_dir(override)
-elsif File.directory?(vendor_arch_dir)
+elsif vendor_arch_dir
   warn "[curl_impersonate] using vendored libcurl-impersonate at #{vendor_arch_dir}"
   configure_from_dir(vendor_arch_dir)
 else
