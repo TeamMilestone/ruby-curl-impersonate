@@ -14,7 +14,20 @@ module CurlImpersonate
   DEFAULT_IMPERSONATE = "chrome131".freeze
   DEFAULT_TIMEOUT_SEC = 15
 
-  def self.do_request(url:, impersonate: DEFAULT_IMPERSONATE, timeout_sec: DEFAULT_TIMEOUT_SEC)
-    _do_request_native(url.to_s, impersonate.to_s, Integer(timeout_sec))
+  def self.do_request(url:,
+                      impersonate: DEFAULT_IMPERSONATE,
+                      headers: {},
+                      post_data: "",
+                      follow_redirects: true,
+                      timeout_sec: DEFAULT_TIMEOUT_SEC)
+    string_headers = headers.each_with_object({}) { |(k, v), h| h[k.to_s] = v.to_s }
+    _do_request_native(
+      url.to_s,
+      impersonate.to_s,
+      string_headers,
+      post_data.to_s,
+      follow_redirects ? true : false,
+      Integer(timeout_sec),
+    )
   end
 end
