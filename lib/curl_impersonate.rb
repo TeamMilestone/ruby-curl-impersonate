@@ -5,6 +5,7 @@ module CurlImpersonate
 end
 
 require "curl_impersonate/response"
+require "curl_impersonate/cookies"
 
 # The C extension grabs CurlImpersonate::Error and CurlImpersonate::Response
 # via rb_const_get during Init, so both must be defined before this require.
