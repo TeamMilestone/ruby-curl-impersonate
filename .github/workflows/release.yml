@@ -36,7 +36,7 @@ jobs:
       - name: Build native gem
         env:
           RAKE_EXTENSION_PLATFORM: ${{ matrix.platform }}
-        run: bundle exec rake native:${{ matrix.platform }} gem
+        run: bundle exec rake native:${{ matrix.platform }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,7 +74,7 @@ jobs:
       - name: Cross-compile native gem
         run: |
           bundle exec rake-compiler-dock \
-            sh -c "bundle install && bundle exec rake native:${{ matrix.platform }} gem"
+            sh -c "bundle install && bundle exec rake native:${{ matrix.platform }}"
 
       - uses: actions/upload-artifact@v4
         with:
