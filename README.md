@@ -13,7 +13,7 @@ This is a Ruby port of [`go-curl-impersonate`](https://github.com/TeamMilestone/
 gem "curl_impersonate"
 ```
 
-On platforms with a precompiled gem (`arm64-darwin`, `x86_64-darwin`, `aarch64-linux`, `x86_64-linux`), `gem install` is a single step with no external dependencies — the BoringSSL build is statically linked into the gem's native extension.
+On platforms with a precompiled gem (`arm64-darwin`, `x86_64-darwin`, `x86_64-linux-gnu`), `gem install` is a single step with no external dependencies — the BoringSSL build is statically linked into the gem's native extension.
 
 On other platforms you will need to build from source; see [Building from source](#building-from-source).
 
