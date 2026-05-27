@@ -32,6 +32,22 @@ CURL_IMPERSONATE_PLATFORMS.each_key do |target_platform|
         raise "no compiled binary found under lib/curl_impersonate/ after rake compile"
       end
 
+      # Belt and suspenders for macOS: even with -undefined,dynamic_lookup at
+      # link time, some setups still bake in an absolute libruby.dylib install
+      # name. Rewrite any such reference to @rpath/<basename> so the dynamic
+      # loader resolves it against the consuming Ruby's lib directory.
+      if target_platform =~ /darwin/
+        binaries.each do |bundle|
+          deps = `otool -L #{bundle.shellescape}`.lines.map { |l| l.strip.split(/\s+/).first }.compact
+          deps.each do |dep|
+            next unless dep.include?("/libruby.") && dep.start_with?("/")
+            new_dep = "@rpath/#{File.basename(dep)}"
+            sh "install_name_tool", "-change", dep, new_dep, bundle
+            puts "[native:#{target_platform}] rewrote libruby reference: #{dep} -> #{new_dep}"
+          end
+        end
+      end
+
       spec = Gem::Specification.load("curl_impersonate.gemspec").dup
       spec.platform   = target_platform
       spec.files      = (spec.files + binaries).uniq

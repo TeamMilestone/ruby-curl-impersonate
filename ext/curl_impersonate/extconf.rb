@@ -1,5 +1,22 @@
-require "mkmf"
+require "rbconfig"
 require "shellwords"
+
+# Avoid baking an absolute libruby.dylib install_name into the resulting
+# .bundle on macOS: clear LIBRUBYARG_SHARED *before* mkmf is loaded, so its
+# Makefile template renders LIBS without `-lruby.X.Y`. The dynamic loader will
+# satisfy Ruby symbols from the host process at require time — this is the
+# documented portable pattern for macOS Ruby extensions and is also how
+# nokogiri/sqlite3 ship their precompiled darwin gems.
+if RUBY_PLATFORM =~ /darwin/
+  # mkmf uses MAKEFILE_CONFIG (NOT CONFIG) for $(LIBRUBYARG_SHARED) expansion
+  # inside the generated Makefile. Clear both for safety.
+  RbConfig::CONFIG["LIBRUBYARG_SHARED"]          = ""
+  RbConfig::CONFIG["LIBRUBYARG"]                 = ""
+  RbConfig::MAKEFILE_CONFIG["LIBRUBYARG_SHARED"] = ""
+  RbConfig::MAKEFILE_CONFIG["LIBRUBYARG"]        = ""
+end
+
+require "mkmf"
 
 # Resolve libcurl-impersonate location.
 #
@@ -44,6 +61,14 @@ def configure_from_dir(dir)
     # Source: pkg-config --libs libcurl-impersonate on brew installation.
     $LDFLAGS << " -framework CoreFoundation -framework SystemConfiguration"
     $LDFLAGS << " -framework Security -framework LDAP"
+    # ruby/setup-ruby on macos-14 builds a Ruby whose libruby has an absolute
+    # install_name (e.g. /Users/runner/hostedtoolcache/Ruby/3.3.11/arm64/lib/
+    # libruby.3.3.dylib). Any extension we statically-link against that Ruby
+    # inherits the absolute reference, breaking the precompiled gem on every
+    # other machine. Tell the linker to leave Ruby symbols unresolved and let
+    # the dynamic loader fill them in at require time — this is the standard
+    # macOS pattern for portable Ruby extensions.
+    $DLDFLAGS << " -Wl,-undefined,dynamic_lookup"
     $libs    = "#{$libs} -lresolv -liconv -lz -lc++"
   when /linux/
     # The lexiforest release tarball is a fully-static archive — zstd, brotli,
